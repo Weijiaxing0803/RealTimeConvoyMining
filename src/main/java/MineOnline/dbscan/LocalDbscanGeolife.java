@@ -1,7 +1,7 @@
 package MineOnline.dbscan;
 
 import MineOnline.common.TrajectoryData;
-import MineOnline.grid.SixteenGrid;
+import MineOnline.grid.GeoLifeGrid;
 import MineOnline.common.Cluster;
 import MineOnline.common.ClusterList;
 import org.apache.flink.api.common.functions.AggregateFunction;
@@ -9,7 +9,7 @@ import org.apache.flink.api.common.functions.AggregateFunction;
 import java.util.ArrayList;
 import java.util.List;
 
-public class LocalDbscan implements AggregateFunction<
+public class LocalDbscanGeolife implements AggregateFunction<
         TrajectoryData,
         List<TrajectoryData>,
         ClusterList>{
@@ -18,7 +18,7 @@ public class LocalDbscan implements AggregateFunction<
     public int minPts;
     public int partition;
 
-    public LocalDbscan(double eps, int minPts, int partition) {
+    public LocalDbscanGeolife(double eps, int minPts, int partition) {
         this.eps = eps;
         this.minPts = minPts;
         this.partition = partition;
@@ -43,7 +43,7 @@ public class LocalDbscan implements AggregateFunction<
         DBSCAN dbscan = new DBSCAN(eps,minPts,dateTime,accumulator);
         finalPoints = dbscan.cluster();
         dbscan.setID_COUNTER(0L);
-        SixteenGrid sixteenGrid = new SixteenGrid(eps);
+        GeoLifeGrid sixteenGrid = new GeoLifeGrid(eps);
         long bigPartition = sixteenGrid.bigPartition(closeID,partition);
         List<Cluster> LC = new ArrayList<>();
         for(List<FinalPoint> l:finalPoints){

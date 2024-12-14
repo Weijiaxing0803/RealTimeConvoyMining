@@ -15,11 +15,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-
-
-// the detail of RTCM: include SCCP and PCCP
 public class MineWindowPro extends ProcessWindowFunction<
-        List<Objects>,Convoy,Boolean, TimeWindow
+        List<Objects>,Convoy,Long, TimeWindow
         >{
 
     ValueState<LClusterConvoy> LCluster;
@@ -37,7 +34,7 @@ public class MineWindowPro extends ProcessWindowFunction<
 
     @Override
     public void open(Configuration parameters) throws Exception {
-        //      store the candidate convoy
+        //      实现状态保存
         LCluster = getRuntimeContext().getState(new ValueStateDescriptor<LClusterConvoy>("LCluster", LClusterConvoy.class));
 //        Counter = getRuntimeContext().getState(new ValueStateDescriptor<StateCount>("StateCount", StateCount.class));
 
@@ -45,22 +42,29 @@ public class MineWindowPro extends ProcessWindowFunction<
     }
 
     @Override
-    public void process(Boolean aBoolean, Context context, Iterable<List<Objects>> iterable, Collector<Convoy> collector) throws Exception {
+    public void process(Long aLong, Context context, Iterable<List<Objects>> iterable, Collector<Convoy> collector) throws Exception {
 
         List<ClusterConvoy> RightConvoy = new ArrayList<>();
         List<Convoy> Rsubconvoy;
 
+        List<ClusterConvoy> LeftConvoy = new ArrayList<>();
         List<ClusterConvoy> LeftCluster = new ArrayList<>();
 
+        List<Convoy> LeftClusterState = new ArrayList<>();
+        List<Convoy> LeftConvoyState = new ArrayList<>();
+        int count;
+
+        boolean out = false;
         boolean fullMerge = false;
+        String date = null;
 
         List<Integer> res;
         List<Integer> subres;
 
-//        Convert the clusters in the current snapshot to primary candidate convoy
         for(List<Objects> l:iterable){
             List<Integer> objs;
             List<String> os;
+            date = l.get(0).getDateTime();
             for(Objects o:l){
                 objs = new ArrayList<>();
                 os = o.getObjs();
@@ -72,49 +76,59 @@ public class MineWindowPro extends ProcessWindowFunction<
             }
         }
 
-//        if there is no candidate convoy
         if(LCluster.value() == null) {
             LClusterConvoy lc = new LClusterConvoy(RightConvoy);
             LCluster.update(lc);
-
+//            StateCount sc = new StateCount(0);
+//            Counter.update(sc);
             return;
         }
         else{
             LeftCluster = LCluster.value().getResult();
         }
 
+//        count = Counter.value().getResult();
+//        for(ClusterConvoy c:RightConvoy){
+//            System.out.println("Right:");
+//            System.out.println(c);
+//        }
+//
+//        for(ClusterConvoy c:LeftCluster){
+//            System.out.println("Left:");
+//            System.out.println(c);
+//        }
 
-//      SCCP
+//        剪枝，相邻两个时间戳之间求交集
         for(ClusterConvoy Robjs:RightConvoy){
             for(ClusterConvoy Lobjs:LeftCluster){
-
-                //SCCP pruning condition
                 if(Lobjs.jump(m)){
                     continue;
                 }
-
-                res = SubsequenceBasedIntersections(Lobjs.getObjs(),Robjs.getObjs());
+                res = GroupIntersections(Lobjs.getObjs(),Robjs.getObjs());
 //                count++;
 
                 if(res.isEmpty()){
                     continue;
                 }
-
-//                employ a counter for each primary candidate convoy
                 Robjs.setCount(res.size() + Robjs.getCount());
                 Lobjs.setCount(res.size() + Lobjs.getCount());
 
-                //PCCP
-                //intersection greater than m
-                // PCCP pruning condidation 1
+                //Cluster间的交集大于等于m
                 if(res.size() >= m){
-
+                    //判断交集是否等于右快照的cluster
+//                    System.out.println(res);
+//                    System.out.println("1");
+//                    System.out.println(fullMerge);
                     if(res.size() == Robjs.size()){
                         Robjs.setStartTime(Lobjs.getStartTime());
                         fullMerge = true;
                     }
+//                    System.out.println("2");
+//                    System.out.println(fullMerge);
+                    //遍历左快照cluster的subconvoy
                     for(Convoy LSub:Lobjs.getSubConvoy()){
-                        subres = SubsequenceBasedIntersections(LSub.getObjs(),res);
+                        subres = GroupIntersections(LSub.getObjs(),res);
+//                        count++;
                         if(subres.size() < m){
                             continue;
                         }
@@ -129,12 +143,12 @@ public class MineWindowPro extends ProcessWindowFunction<
                             Rsubconvoy = updateVnext(Rsubconvoy,convoys);
                             Robjs.setSubConvoy(Rsubconvoy);
                         }
-                        // PCCP pruning condidation 2
                         if(subres.size() == res.size()){
                             fullMerge = true;
                             break;
                         }
                     }
+//                    System.out.println(fullMerge);
                     if(!fullMerge){
                         Convoy convoys = new Convoy(res,Lobjs.getStartTime(),Robjs.getEndTime(),lifespan);
                         Rsubconvoy = Robjs.getSubConvoy();
@@ -144,19 +158,19 @@ public class MineWindowPro extends ProcessWindowFunction<
 
                 }
                 fullMerge = false;
-
-                //SCCP pruning condition
+                //满足剪枝条件
                 if(Robjs.jump(m)){
                     break;
                 }
             }
         }
 
-
-        //output real convoy
+//        for(ClusterConvoy c:RightConvoy){
+//            System.out.println("Right:");
+//            System.out.println(c);
+//        }
         for(ClusterConvoy Robjs:RightConvoy){
             Robjs.setCount(0);
-            //sort sub candidate convoy
             Robjs.getSubConvoy().sort(new Comparator<Convoy>() {
                 @Override
                 public int compare(Convoy o1, Convoy o2) {
@@ -174,13 +188,41 @@ public class MineWindowPro extends ProcessWindowFunction<
             }
         }
 
+//        for(Convoy c:LeftClusterState){
+//            if(c.lifetime() >= k){
+//                collector.collect(c);
+//                out = true;
+//            }
+//        }
+//        for(Convoy c:LeftConvoyState){
+//            if(c.lifetime() >= k){
+//                collector.collect(c);
+//                out = true;
+//            }
+//        }
+
+//        if(!out){
+//            List<Integer> ress = new ArrayList<>();
+//            ress.add(0);
+//            Convoy convoys = new Convoy(ress,date,date,lifespan);
+//            collector.collect(convoys);
+//        }
+//        List<Integer> list = new ArrayList<>();
+//        list.add(0);
+//        Convoy convoy = new Convoy(list,"000","000",lifespan);
+//        convoy.setCount(count);
+//        collector.collect(convoy);
+
         LClusterConvoy lc = new LClusterConvoy(RightConvoy);
         LCluster.update(lc);
+//
+//        StateCount sc = new StateCount(count);
+//        Counter.update(sc);
+
     }
 
 
-    //Subsequence-Based Intersection
-    public static List<Integer> SubsequenceBasedIntersections(List<Integer> objs1, List<Integer> objs2){
+    public static List<Integer> GroupIntersections(List<Integer> objs1, List<Integer> objs2){
         List<Integer> res = new ArrayList<>();
         int num1,num2;
         int sqrtnum1,sqrtnum2;
@@ -207,9 +249,9 @@ public class MineWindowPro extends ProcessWindowFunction<
         num2 = objs2.size();
         sqrtnum1 = (int) Math.sqrt(num1);
         sqrtnum2 = (int) Math.sqrt(num2);
-
+        boolean flag1 = true;
+        boolean flag2 = false;
         while (cur1 < num1 && cur2 < num2){
-            //compare start and last element
             if(cur1 == pointer1 + sqrtnum1){
                 pointer1 += sqrtnum1;
             }
@@ -242,8 +284,6 @@ public class MineWindowPro extends ProcessWindowFunction<
                 cur2 = pointer2;
                 continue;
             }
-
-            //intersection
             while(cur1 <= groupend1 && cur2 <= groupend2){
                 if(objs1.get(cur1).equals(objs2.get(cur2))){
                     res.add(objs1.get(cur1));

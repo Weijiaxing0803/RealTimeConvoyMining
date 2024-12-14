@@ -1,12 +1,8 @@
 package MineOnline.ConvoyMinePro;
 
 import MineOnline.MineWindow.MineWindowPro;
-import MineOnline.common.Convoy;
-import MineOnline.common.Objects;
-import MineOnline.common.TrajectoryData;
-import MineOnline.dbscan.FinalPoint;
-import MineOnline.dbscan.GlobalDbscan;
-import MineOnline.dbscan.LocalDbscan;
+import MineOnline.common.*;
+import MineOnline.dbscan.*;
 import MineOnline.udf.RawDataFlatMapGeoLife;
 import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -23,7 +19,6 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.streaming.api.windowing.time.Time;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 
@@ -88,6 +83,13 @@ public class ConvoyMineProGeolife {
             System.err.println("need to provide --out");
             return;
         }
+        int partition;
+        try{
+            partition = parameterTool.getInt("partition");
+        }catch (Exception e){
+            System.err.println("需要提供 --partition 参数");
+            return;
+        }
 
 
         // 1.Create a stream execution environment
@@ -123,18 +125,23 @@ public class ConvoyMineProGeolife {
         //*******************************************************************************
 
         // 5. LocalDbscan
-        SingleOutputStreamOperator<Map<Long,List<List<FinalPoint>>>> stream4 = stream3.keyBy(data -> data.closeID)
+        SingleOutputStreamOperator<ClusterList> stream4 = stream3.keyBy(data -> data.closeID)
                 .window(TumblingEventTimeWindows.of(Time.seconds(timeDis)))
-                .aggregate(new LocalDbscan(eps,minPts))
-                .filter(data->(data.values().iterator().next().size() != 0));
+                .aggregate(new LocalDbscanGeolife(eps,minPts,partition))//此处将完成localdbscan算法
+                .filter(data->(data.getObjs().iterator().next().getObjs().size() != 0));
 
-        // 6. Global clustering merge
-        SingleOutputStreamOperator<List<Objects>> stream5 = stream4.keyBy(data -> true)
+        // 6. Local clustering merge
+        SingleOutputStreamOperator<List<Cluster>> stream5 = stream4.keyBy(data -> data.getBigPartition())
+                .window(TumblingEventTimeWindows.of(Time.seconds(timeDis)))
+                .aggregate(new GlobalDbscanPartitionGeolife(eps,partition));
+
+        // 7. Global clustering merge
+        SingleOutputStreamOperator<List<Objects>> stream6 = stream5.keyBy(data -> true)
                 .window(TumblingEventTimeWindows.of(Time.seconds(timeDis)))
                 .aggregate(new GlobalDbscan(eps));
 
-        // 7. convoy generation
-        SingleOutputStreamOperator<Convoy> stream6 = stream5.keyBy(data -> true)
+        // 8. convoy generation
+        SingleOutputStreamOperator<Convoy> stream7 = stream6.keyBy(data -> data.get(0).getBigPartition())
                 .window(TumblingEventTimeWindows.of(Time.seconds(timeDis)))
                 .process(new MineWindowPro(k,m,timeDis));
 
@@ -153,7 +160,7 @@ public class ConvoyMineProGeolife {
                 .build();
 
 
-        DataStreamSink<String> sink = stream6.map(data -> data.toString())
+        DataStreamSink<String> sink = stream7.map(data -> data.toString())
                 .addSink(streamingFileSink);
         sink.setParallelism(1);
 

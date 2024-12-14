@@ -1,7 +1,5 @@
 package MineOnline.dbscan;
 
-import MineOnline.common.Objects;
-import MineOnline.grid.GeoLifeGrid;
 import org.apache.flink.api.common.functions.AggregateFunction;
 
 import java.util.*;
