@@ -1,4 +1,4 @@
-Real-time convoy mining is implemented through Flink.
+Real-time co-movement mining is implemented through Flink.
 
 All datasets are available at the following.
 
